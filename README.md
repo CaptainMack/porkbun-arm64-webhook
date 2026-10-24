@@ -153,11 +153,11 @@ The solver accepts this `config` block in the issuer:
 - **What it can access.** Kubernetes: `get` on the listed Secret names in one namespace, plus the standard delegated-auth permissions every cert-manager webhook needs (`system:auth-delegator`, reading the API server's authentication ConfigMap, and listing flow-control objects). Network: the Kubernetes API and `api.porkbun.com`.
 - **What it does with your keys.** Sends them to Porkbun to create and delete `_acme-challenge` TXT records. Keys are never logged.
 - **Scope your Porkbun key.** Porkbun keys are account-wide; enable API access only on the domains that need certificates.
-- **Verify the image** before deploying it:
+- **Verify the image** before deploying it (cosign **v3+**; older versions don't see the new signature format, and the identity is case-sensitive):
 
   ```sh
   cosign verify ghcr.io/captainmack/porkbun-arm64-webhook:0.2.0 \
-    --certificate-identity-regexp 'https://github.com/captainmack/porkbun-arm64-webhook/.github/workflows/release.yml@.*' \
+    --certificate-identity-regexp '^https://github.com/CaptainMack/porkbun-arm64-webhook/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
