@@ -3,13 +3,14 @@ package porkbun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook"
 	acme "github.com/cert-manager/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
 	"github.com/nrdcg/porkbun"
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -18,7 +19,9 @@ import (
 )
 
 type PorkbunSolver struct {
-	kube *kubernetes.Clientset
+	kube kubernetes.Interface
+	// baseURL overrides the Porkbun API endpoint; nil means the real API. Tests only.
+	baseURL *url.URL
 }
 
 func (e *PorkbunSolver) Name() string {
@@ -35,7 +38,7 @@ func (e *PorkbunSolver) readConfig(request *acme.ChallengeRequest) (*porkbun.Cli
 
 	if request.Config != nil {
 		if err := json.Unmarshal(request.Config.Raw, &config); err != nil {
-			return nil, errors.Wrap(err, "config error")
+			return nil, fmt.Errorf("config error: %w", err)
 		}
 	}
 
@@ -49,37 +52,56 @@ func (e *PorkbunSolver) readConfig(request *acme.ChallengeRequest) (*porkbun.Cli
 		return nil, err
 	}
 
-	return porkbun.New(secretKey, apiKey), nil
+	client := porkbun.New(secretKey, apiKey)
+	if e.baseURL != nil {
+		client.BaseURL = e.baseURL
+	}
+	return client, nil
 }
 
 func (e *PorkbunSolver) resolveSecretRef(selector corev1.SecretKeySelector, ch *acme.ChallengeRequest) (string, error) {
 	secret, err := e.kube.CoreV1().Secrets(ch.ResourceNamespace).Get(context.Background(), selector.Name, metav1.GetOptions{})
 	if err != nil {
-		return "", errors.Wrapf(err, "get error for secret %q %q", ch.ResourceNamespace, selector.Name)
+		return "", fmt.Errorf("get error for secret %q %q: %w", ch.ResourceNamespace, selector.Name, err)
 	}
 
 	bytes, ok := secret.Data[selector.Key]
 	if !ok {
-		return "", errors.Errorf("secret %q %q does not contain key %q", ch.ResourceNamespace, selector.Name, selector.Key)
+		return "", fmt.Errorf("secret %q %q does not contain key %q", ch.ResourceNamespace, selector.Name, selector.Key)
 	}
 
 	return string(bytes), nil
 }
 
+// recordNames splits the challenge into the Porkbun domain, the record's
+// subdomain part ("entity") and its full name, refusing names outside the zone
+// so a malformed request can never touch records elsewhere.
+func recordNames(ch *acme.ChallengeRequest) (domain, entity, name string, err error) {
+	domain = strings.TrimSuffix(ch.ResolvedZone, ".")
+	name = strings.TrimSuffix(ch.ResolvedFQDN, ".")
+	if domain == "" || !strings.HasSuffix(name, "."+domain) {
+		return "", "", "", fmt.Errorf("FQDN %q is not inside zone %q", ch.ResolvedFQDN, ch.ResolvedZone)
+	}
+	entity = strings.TrimSuffix(name, "."+domain)
+	return domain, entity, name, nil
+}
+
 func (e *PorkbunSolver) Present(ch *acme.ChallengeRequest) error {
 	klog.Infof("Handling present request for %q %q", ch.ResolvedFQDN, ch.Key)
 
-	client, err := e.readConfig(ch)
+	domain, entity, name, err := recordNames(ch)
 	if err != nil {
-		return errors.Wrap(err, "initialization error")
+		return err
 	}
 
-	domain := strings.TrimSuffix(ch.ResolvedZone, ".")
-	entity := strings.TrimSuffix(ch.ResolvedFQDN, "."+ch.ResolvedZone)
-	name := strings.TrimSuffix(ch.ResolvedFQDN, ".")
+	client, err := e.readConfig(ch)
+	if err != nil {
+		return fmt.Errorf("initialization error: %w", err)
+	}
+
 	records, err := client.RetrieveRecords(context.Background(), domain)
 	if err != nil {
-		return errors.Wrap(err, "retrieve records error")
+		return fmt.Errorf("retrieve records error: %w", err)
 	}
 
 	for _, record := range records {
@@ -96,7 +118,7 @@ func (e *PorkbunSolver) Present(ch *acme.ChallengeRequest) error {
 		TTL:     porkbun.DefaultTTL, // Porkbun rejects anything below its 300s minimum
 	})
 	if err != nil {
-		return errors.Wrap(err, "create record error")
+		return fmt.Errorf("create record error: %w", err)
 	}
 
 	klog.Infof("Created record %v", id)
@@ -106,29 +128,31 @@ func (e *PorkbunSolver) Present(ch *acme.ChallengeRequest) error {
 func (e *PorkbunSolver) CleanUp(ch *acme.ChallengeRequest) error {
 	klog.Infof("Handling cleanup request for %q %q", ch.ResolvedFQDN, ch.Key)
 
+	domain, _, name, err := recordNames(ch)
+	if err != nil {
+		return err
+	}
+
 	client, err := e.readConfig(ch)
 	if err != nil {
-		return errors.Wrap(err, "initialization error")
+		return fmt.Errorf("initialization error: %w", err)
 	}
 
-	domain := strings.TrimSuffix(ch.ResolvedZone, ".")
-	name := strings.TrimSuffix(ch.ResolvedFQDN, ".")
 	records, err := client.RetrieveRecords(context.Background(), domain)
 	if err != nil {
-		return errors.Wrap(err, "retrieve records error")
+		return fmt.Errorf("retrieve records error: %w", err)
 	}
 
+	// Only ever delete the exact TXT record this challenge created.
 	for _, record := range records {
 		if record.Type == "TXT" && record.Name == name && record.Content == ch.Key {
 			id, err := strconv.ParseInt(record.ID, 10, 64) // record IDs outgrow int32
 			if err != nil {
-				return errors.Wrap(err, "found TXT record, but it's ID is malformed")
+				return fmt.Errorf("found TXT record, but its ID %q is malformed: %w", record.ID, err)
 			}
 
-			record.Content = ch.Key
-			err = client.DeleteRecord(context.Background(), domain, int(id))
-			if err != nil {
-				return errors.Wrap(err, "delete record error")
+			if err := client.DeleteRecord(context.Background(), domain, int(id)); err != nil {
+				return fmt.Errorf("delete record error: %w", err)
 			}
 
 			klog.Infof("Deleted record %v", id)
@@ -146,7 +170,7 @@ func (e *PorkbunSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan 
 
 	kube, err := kubernetes.NewForConfig(kubeClientConfig)
 	if err != nil {
-		return errors.Wrap(err, "kube client creation error")
+		return fmt.Errorf("kube client creation error: %w", err)
 	}
 
 	e.kube = kube

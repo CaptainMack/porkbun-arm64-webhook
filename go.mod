@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/cert-manager/cert-manager v1.21.3
 	github.com/nrdcg/porkbun v0.4.0
-	github.com/pkg/errors v0.9.1
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
