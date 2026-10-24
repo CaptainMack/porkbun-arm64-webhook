@@ -93,7 +93,7 @@ func (e *PorkbunSolver) Present(ch *acme.ChallengeRequest) error {
 		Name:    entity,
 		Type:    "TXT",
 		Content: ch.Key,
-		TTL:     "60",
+		TTL:     porkbun.DefaultTTL, // Porkbun rejects anything below its 300s minimum
 	})
 	if err != nil {
 		return errors.Wrap(err, "create record error")
@@ -120,7 +120,7 @@ func (e *PorkbunSolver) CleanUp(ch *acme.ChallengeRequest) error {
 
 	for _, record := range records {
 		if record.Type == "TXT" && record.Name == name && record.Content == ch.Key {
-			id, err := strconv.ParseInt(record.ID, 10, 32)
+			id, err := strconv.ParseInt(record.ID, 10, 64) // record IDs outgrow int32
 			if err != nil {
 				return errors.Wrap(err, "found TXT record, but it's ID is malformed")
 			}

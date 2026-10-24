@@ -20,19 +20,24 @@ spec:
         release: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ include "porkbun-webhook.fullname" . }}
+      securityContext:
+{{ toYaml .Values.podSecurityContext | indent 8 }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --tls-cert-file=/tls/tls.crt
             - --tls-private-key-file=/tls/tls.key
+            - --secure-port={{ .Values.securePort }}
           env:
             - name: GROUP_NAME
-              value: {{ .Values.groupName | quote }}
+              value: {{ required "groupName is required (a domain you own, e.g. acme.example.com)" .Values.groupName | quote }}
+          securityContext:
+{{ toYaml .Values.securityContext | indent 12 }}
           ports:
             - name: https
-              containerPort: 443
+              containerPort: {{ .Values.securePort }}
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -48,12 +53,17 @@ spec:
             - name: certs
               mountPath: /tls
               readOnly: true
+            # The webhook server writes temporary files; the root filesystem is read-only.
+            - name: tmp
+              mountPath: /tmp
           resources:
 {{ toYaml .Values.resources | indent 12 }}
       volumes:
         - name: certs
           secret:
             secretName: {{ include "porkbun-webhook.servingCertificate" . }}
+        - name: tmp
+          emptyDir: {}
     {{- with .Values.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}

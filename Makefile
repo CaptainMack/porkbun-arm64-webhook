@@ -1,7 +1,7 @@
 OS ?= $(shell go env GOOS)
 ARCH ?= $(shell go env GOARCH)
 
-IMAGE_NAME := "porkbun-webhook"
+IMAGE_NAME := "porkbun-arm64-webhook"
 IMAGE_TAG := "latest"
 
 OUT := $(shell pwd)/_out

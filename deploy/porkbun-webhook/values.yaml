@@ -1,21 +1,32 @@
-# The GroupName here is used to identify your company or business unit that
-# created this webhook.
-# For example, this may be "acme.mycompany.com".
-# This name will need to be referenced in each Issuer's `webhook` stanza to
-# inform cert-manager of where to send ChallengePayload resources in order to
-# solve the DNS01 challenge.
-# This group name should be **unique**, hence using your own company's domain
-# here is recommended.
-groupName: acme.mycompany.com
+# API group the webhook registers under. Must be unique to you (use a domain you
+# own) and must match `groupName` in every Issuer/ClusterIssuer that uses it.
+# Required — the chart refuses to render without it.
+groupName: ""
 
 certManager:
   namespace: cert-manager
   serviceAccountName: cert-manager
 
+# Secret(s) holding the Porkbun API key / secret API key that Issuers reference
+# via apiKeySecretRef / secretKeySecretRef. The webhook may read only these
+# names, and only in `credentialsNamespace` (where cert-manager resolves secrets
+# for ClusterIssuers — its "cluster resource namespace").
+credentials:
+  namespace: cert-manager
+  secretNames:
+    - porkbun-credentials
+
 image:
-  repository: ghcr.io/mdonoughe/porkbun-webhook
-  tag: v0.1.5
+  repository: ghcr.io/captainmack/porkbun-arm64-webhook
+  # Defaults to the chart's appVersion.
+  tag: ""
   pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# The container runs as non-root, so it listens on an unprivileged port; the
+# Service still exposes 443 to the Kubernetes API server.
+securePort: 8443
 
 nameOverride: ""
 fullnameOverride: ""
@@ -24,17 +35,26 @@ service:
   type: ClusterIP
   port: 443
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #  cpu: 100m
-  #  memory: 128Mi
-  # requests:
-  #  cpu: 100m
-  #  memory: 128Mi
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
 
 nodeSelector: {}
 

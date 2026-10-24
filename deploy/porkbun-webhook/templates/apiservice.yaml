@@ -1,7 +1,7 @@
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
-  name: v1alpha1.{{ .Values.groupName }}
+  name: v1alpha1.{{ required "groupName is required (a domain you own, e.g. acme.example.com)" .Values.groupName }}
   labels:
     app: {{ include "porkbun-webhook.name" . }}
     chart: {{ include "porkbun-webhook.chart" . }}
