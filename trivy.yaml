@@ -1,0 +1,6 @@
+# Used by the CI misconfiguration scan: render the chart with a placeholder
+# group name (it's required) so Trivy can scan the real manifests.
+misconfiguration:
+  helm:
+    set:
+      - groupName=acme.example.com

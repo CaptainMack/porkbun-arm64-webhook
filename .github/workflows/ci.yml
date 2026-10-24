@@ -1,0 +1,162 @@
+name: CI
+
+# Validation, tests and vulnerability scans for every push and pull request,
+# plus a weekly run so newly published CVEs in dependencies or base images
+# surface even without code changes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.3"
+  GOVULNCHECK_VERSION: v1.9.0
+  GOLANGCI_LINT_VERSION: v2.14.0
+  KUBECONFORM_VERSION: v0.8.0
+  TRIVY_VERSION: v0.75.0
+  TEST_GROUP: acme.example.com
+
+jobs:
+  go:
+    name: Go — format, vet, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go mod tidy is clean
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet (incl. conformance suite)
+        run: go vet ./... && go vet -tags conformance ./...
+      - name: Unit tests (race detector, coverage)
+        run: go test -race -count=1 -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
+      - name: Build linux/arm64 and linux/amd64
+        run: |
+          for arch in arm64 amd64; do CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o /dev/null .; done
+
+  lint:
+    name: Lint (golangci-lint incl. gosec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  govulncheck:
+    name: Go vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+
+  chart:
+    name: Helm chart — lint, guards, schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: helm lint
+        run: helm lint --strict deploy/porkbun-webhook --set groupName=$TEST_GROUP
+      - name: Rendering without groupName must fail
+        run: |
+          if helm template t deploy/porkbun-webhook >/dev/null 2>err.txt; then
+            echo "chart rendered without groupName"; exit 1
+          fi
+          grep -q "groupName is required" err.txt
+      - name: Validate rendered manifests against Kubernetes and cert-manager schemas
+        run: |
+          helm template t deploy/porkbun-webhook --namespace porkbun-webhook --set groupName=$TEST_GROUP > rendered.yaml
+          go run github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION} -strict -summary \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            rendered.yaml
+      - name: Hardening is in the rendered Deployment
+        run: |
+          d=$(yq 'select(.kind == "Deployment")' rendered.yaml)
+          for check in \
+            '.spec.template.spec.securityContext.runAsNonRoot == true' \
+            '.spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault"' \
+            '.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true' \
+            '.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false' \
+            '.spec.template.spec.containers[0].securityContext.capabilities.drop[0] == "ALL"' \
+            '.spec.template.spec.containers[0].resources.limits.memory != null'; do
+            [ "$(echo "$d" | yq "$check")" = "true" ] || { echo "FAILED: $check"; exit 1; }
+          done
+          # The credentials Role must be name-scoped, get-only.
+          r=$(yq 'select(.kind == "Role" and (.metadata.name | test("credentials-reader")))' rendered.yaml)
+          [ "$(echo "$r" | yq '(.rules | length) == 1 and (.rules[0].verbs | length) == 1 and .rules[0].verbs[0] == "get" and (.rules[0].resourceNames | length) > 0')" = "true" ] \
+            || { echo "credentials Role is not name-scoped get-only"; exit 1; }
+
+  image:
+    name: Image — Dockerfile lint, build, CVE scan, smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: porkbun-arm64-webhook:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          [ "$(docker image inspect porkbun-arm64-webhook:ci --format '{{.Config.User}}')" = "65532:65532" ]
+          docker run --rm -e GROUP_NAME=$TEST_GROUP porkbun-arm64-webhook:ci --help 2>&1 | grep -q -- --secure-port
+          # Without GROUP_NAME it must refuse to start.
+          ! docker run --rm porkbun-arm64-webhook:ci >/dev/null 2>&1
+      - name: Trivy — image CVEs (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: porkbun-arm64-webhook:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Trivy — misconfigurations in Dockerfile and chart
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivy-config: trivy.yaml

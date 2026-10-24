@@ -26,10 +26,10 @@ cert-manager ──(APIService v1alpha1.<groupName>)──▶ webhook ──▶ 
 
 - **Multi-arch image** (`linux/amd64`, `linux/arm64`), cross-compiled without emulation.
 - **Hardened runtime:** distroless static base, runs as non-root UID 65532, read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp, resource limits. Listens on 8443 (the Service still exposes 443).
-- **Least-privilege RBAC:** the chart grants `get` on the named credentials Secret(s) only, in one namespace — upstream left this as a manual step.
+- **Least-privilege RBAC:** the chart grants `get` on the named credentials Secret(s) only, in one namespace — upstream left this as a manual step — and cert-manager may call only the `porkbun` resource (upstream: `*`).
 - **Supply chain:** base images pinned by digest, GitHub Actions pinned by commit SHA, images ship an SBOM and SLSA provenance and are **signed with cosign** (keyless).
 - **Up-to-date dependencies:** cert-manager v1.21, Kubernetes client v0.36, Go 1.27; `govulncheck` clean.
-- **Fixes:** TXT records use Porkbun's minimum TTL (300 s — upstream's 60 s is below it), and record IDs are parsed as 64-bit (upstream's 32-bit parse breaks once IDs pass 2³¹).
+- **Fixes:** TXT records use Porkbun's minimum TTL (300 s — upstream's 60 s is below it), record IDs are parsed as 64-bit (upstream's 32-bit parse breaks once IDs pass 2³¹), and record names outside the challenge's zone are refused.
 - **Flow-control RBAC** that current cert-manager webhook libraries need.
 
 ## Requirements
@@ -56,7 +56,7 @@ Pick a `groupName` that is unique to you — a domain you own, for example `acme
 
 ```sh
 helm install porkbun-webhook oci://ghcr.io/captainmack/charts/porkbun-webhook \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace cert-manager-webhook-porkbun --create-namespace \
   --set groupName=acme.example.com
 ```
@@ -156,12 +156,12 @@ The solver accepts this `config` block in the issuer:
 - **Verify the image** before deploying it (cosign **v3+**; older versions don't see the new signature format, and the identity is case-sensitive):
 
   ```sh
-  cosign verify ghcr.io/captainmack/porkbun-arm64-webhook:0.2.0 \
+  cosign verify ghcr.io/captainmack/porkbun-arm64-webhook:0.2.1 \
     --certificate-identity-regexp '^https://github.com/CaptainMack/porkbun-arm64-webhook/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
-To report a vulnerability, open a [private security advisory](https://github.com/captainmack/porkbun-arm64-webhook/security/advisories/new) rather than a public issue.
+See [SECURITY.md](SECURITY.md) for the threat model, the security review of this fork, and how to report a vulnerability privately.
 
 ## Troubleshooting
 
@@ -183,14 +183,31 @@ The solver name and issuer `config` format are unchanged. Install this chart, po
 ## Development
 
 ```sh
-go build ./... && go vet ./...
+go test -race ./...          # unit tests: fake Porkbun API + fake Kubernetes client, no credentials needed
+go vet ./...
 docker buildx build --platform linux/arm64,linux/amd64 .
 ```
 
-**Conformance suite.** cert-manager's DNS01 conformance tests (`main_test.go`) run against a real Porkbun zone and a local control plane:
+**Unit tests** (`porkbun/porkbun_test.go`) cover record creation (name, TTL), idempotency, wildcard + apex tokens side by side, deleting only the matching record, IDs beyond 2³¹, rejecting names outside the zone, missing/invalid credentials and malformed config.
 
-1. Copy `testdata/porkbun-solver/` and put real keys in `porkbun-secret.yaml` (never commit them).
+**Conformance suite.** cert-manager's DNS01 conformance tests (`main_test.go`, build tag `conformance`) run against a real Porkbun zone and a local control plane:
+
+1. Put real keys in `testdata/porkbun-solver/porkbun-secret.yaml` (never commit them).
 2. Run `TEST_ZONE_NAME=example.com. make test` (downloads etcd/kube-apiserver test binaries).
+
+### CI
+
+| Workflow | Runs on | What it checks |
+|---|---|---|
+| `ci.yml` | push, PR, weekly | `go mod tidy`/`gofmt`/`go vet`, unit tests with `-race`, arm64+amd64 builds, golangci-lint (incl. gosec), govulncheck, Helm lint + kubeconform schema validation + assertions on rendered hardening and RBAC, hadolint, container smoke test, Trivy image CVEs and misconfigurations |
+| `codeql.yml` | push, PR, weekly | CodeQL `security-extended` for Go |
+| `release.yml` | push to `main`, tags `v*` | Multi-arch image to GHCR with SBOM, provenance and cosign signature; Helm chart to `oci://ghcr.io/captainmack/charts` on tags |
+
+Dependabot (`.github/dependabot.yml`) opens weekly updates for Go modules, base images and Actions.
+
+### Releasing
+
+Bump `version`/`appVersion` in `deploy/porkbun-webhook/Chart.yaml`, merge to `main`, then tag: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
 
 ## Credits
 

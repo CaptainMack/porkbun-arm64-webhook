@@ -52,7 +52,8 @@ subjects:
     name: {{ include "porkbun-webhook.fullname" . }}
     namespace: {{ .Release.Namespace }}
 ---
-# Grant cert-manager permission to validate using our apiserver
+# Grant cert-manager permission to call the solver. cert-manager POSTs to the
+# resource named after the solver ("porkbun") — nothing else in the group.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -66,9 +67,9 @@ rules:
   - apiGroups:
       - {{ .Values.groupName }}
     resources:
-      - '*'
+      - porkbun
     verbs:
-      - 'create'
+      - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

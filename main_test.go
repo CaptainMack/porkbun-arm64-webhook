@@ -1,3 +1,5 @@
+//go:build conformance
+
 package main
 
 import (
@@ -13,7 +15,13 @@ var (
 	zone = os.Getenv("TEST_ZONE_NAME")
 )
 
+// TestRunsSuite is cert-manager's DNS01 conformance suite. It needs a real
+// Porkbun zone, real API keys in testdata/porkbun-solver and control-plane
+// binaries (make test), so it is behind the `conformance` build tag (make test).
 func TestRunsSuite(t *testing.T) {
+	if zone == "" {
+		t.Fatal("TEST_ZONE_NAME must be set, e.g. TEST_ZONE_NAME=example.com.")
+	}
 	// The manifest path should contain a file named config.json that is a
 	// snippet of valid configuration that should be included on the
 	// ChallengeRequest passed as part of the test cases.
