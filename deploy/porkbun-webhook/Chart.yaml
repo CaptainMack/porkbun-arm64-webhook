@@ -1,8 +1,8 @@
 apiVersion: v1
-appVersion: "0.2.2"
+appVersion: "0.2.3"
 description: A Porkbun DNS01 solver for cert-manager (multi-arch, hardened fork of mdonoughe/porkbun-webhook).
 name: porkbun-webhook
-version: 0.2.2
+version: 0.2.3
 home: https://github.com/captainmack/porkbun-arm64-webhook
 sources:
   - https://github.com/captainmack/porkbun-arm64-webhook
