@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Kubernetes libraries must match the minor cert-manager is built against
+      # (mixed minors break the webhook API server); bump them together with
+      # cert-manager by hand. Patch releases are still proposed.
+      - dependency-name: "k8s.io/*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       kubernetes:
         patterns: ["k8s.io/*", "sigs.k8s.io/*", "github.com/cert-manager/*"]

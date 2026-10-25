@@ -7,12 +7,6 @@ linters:
     - errorlint
     - misspell
     - unconvert
-  settings:
-    gosec:
-      excludes:
-        # Integer conversion of Porkbun record IDs: parsed with bitSize 64 and
-        # passed to the client's int parameter; we only build 64-bit targets.
-        - G115
   exclusions:
     presets:
       - std-error-handling

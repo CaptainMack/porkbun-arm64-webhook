@@ -38,7 +38,7 @@ Findings from reviewing upstream `mdonoughe/porkbun-webhook` at `1d558a7` and th
 | 4 | Container listened on 443 (needs root / `NET_BIND_SERVICE`) | Low | Listens on 8443; Service still exposes 443 |
 | 5 | Challenge FQDN not checked against the zone; a malformed request could target a record outside it | Low | `recordNames` rejects names outside the zone, before any API call |
 | 6 | TXT TTL 60 s, below Porkbun's 300 s minimum | Bug | Uses `porkbun.DefaultTTL` |
-| 7 | Record IDs parsed as int32; deletion fails once IDs pass 2³¹ | Bug | Parsed as int64 |
+| 7 | Record IDs parsed as int32; deletion fails once IDs pass 2³¹ | Bug | Parsed with `strconv.Atoi` into the platform int (64-bit), erroring on overflow instead of truncating (CodeQL `go/incorrect-integer-conversion`) |
 | 8 | Dependencies two years old (cert-manager v1.16, client-go v0.31, archived `pkg/errors`) | Medium | cert-manager v1.21, client-go v0.36, Go 1.27; `pkg/errors` removed |
 | 9 | Missing flow-control RBAC required by current webhook libraries | Bug | Added (`list`/`watch` on flow-control objects) |
 

@@ -56,7 +56,7 @@ Pick a `groupName` that is unique to you — a domain you own, for example `acme
 
 ```sh
 helm install porkbun-webhook oci://ghcr.io/captainmack/charts/porkbun-webhook \
-  --version 0.2.1 \
+  --version 0.2.2 \
   --namespace cert-manager-webhook-porkbun --create-namespace \
   --set groupName=acme.example.com
 ```
@@ -156,7 +156,7 @@ The solver accepts this `config` block in the issuer:
 - **Verify the image** before deploying it (cosign **v3+**; older versions don't see the new signature format, and the identity is case-sensitive):
 
   ```sh
-  cosign verify ghcr.io/captainmack/porkbun-arm64-webhook:0.2.1 \
+  cosign verify ghcr.io/captainmack/porkbun-arm64-webhook:0.2.2 \
     --certificate-identity-regexp '^https://github.com/CaptainMack/porkbun-arm64-webhook/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```

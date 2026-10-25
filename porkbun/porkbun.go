@@ -146,12 +146,14 @@ func (e *PorkbunSolver) CleanUp(ch *acme.ChallengeRequest) error {
 	// Only ever delete the exact TXT record this challenge created.
 	for _, record := range records {
 		if record.Type == "TXT" && record.Name == name && record.Content == ch.Key {
-			id, err := strconv.ParseInt(record.ID, 10, 64) // record IDs outgrow int32
+			// Atoi parses into the platform int (64-bit on our targets; record IDs
+			// outgrow int32) and errors instead of truncating on overflow.
+			id, err := strconv.Atoi(record.ID)
 			if err != nil {
 				return fmt.Errorf("found TXT record, but its ID %q is malformed: %w", record.ID, err)
 			}
 
-			if err := client.DeleteRecord(context.Background(), domain, int(id)); err != nil {
+			if err := client.DeleteRecord(context.Background(), domain, id); err != nil {
 				return fmt.Errorf("delete record error: %w", err)
 			}
 
