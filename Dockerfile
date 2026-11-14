@@ -1,6 +1,6 @@
 # Cross-compiles on the build host's architecture (no QEMU), then ships a static
 # binary on distroless as a non-root user. Base images are pinned by digest.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 
 WORKDIR /workspace
 ENV GOTOOLCHAIN=local
